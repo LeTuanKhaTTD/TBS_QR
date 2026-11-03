@@ -4,50 +4,50 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
   <title>TBS QR Scanner</title>
-  <!-- Thư viện quét camera chuyên nghiệp -->
-  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <!-- Thư viện giải mã trực tiếp cực nhẹ, không sinh thẻ thừa gây lag/lệch -->
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
     body {
       background: #000;
       color: #fff;
       font-family: system-ui, -apple-system, sans-serif;
       height: 100vh;
+      width: 100vw;
       overflow: hidden;
-      display: flex;
-      flex-direction: column;
+      position: relative;
     }
     .header {
       padding: 14px 18px;
       display: flex;
       justify-content: space-between;
       align-items: center;
-      background: rgba(0,0,0,0.85);
+      background: linear-gradient(180deg, rgba(0,0,0,0.85) 0%, transparent 100%);
       position: absolute;
       top: 0; left: 0; right: 0;
-      z-index: 20;
+      z-index: 30;
     }
-    .title { font-size: 1rem; font-weight: 700; color: #70B62C; }
+    .title { font-size: 0.95rem; font-weight: 800; color: #70B62C; letter-spacing: 0.5px; }
     .btn-close {
-      background: rgba(255,255,255,0.2);
+      background: rgba(255,255,255,0.25);
       border: none;
       color: #fff;
       padding: 6px 14px;
       border-radius: 20px;
       font-weight: 700;
+      font-size: 0.85rem;
       cursor: pointer;
     }
-    #reader {
-      width: 100vw !important;
-      height: 100vh !important;
+    
+    /* Video căn chuẩn toàn màn hình, mượt mà */
+    #scannerVideo {
+      width: 100vw;
+      height: 100vh;
       object-fit: cover;
+      display: block;
     }
-    #reader video {
-      width: 100% !important;
-      height: 100% !important;
-      object-fit: cover !important;
-    }
-    /* Khung ngắm Laser Ngân Hàng */
+
+    /* Khung ngắm Laser Ngân Hàng - Căn chính giữa tâm màn hình */
     .overlay {
       position: absolute;
       inset: 0;
@@ -59,32 +59,34 @@
       z-index: 10;
     }
     .reticle {
-      width: 240px;
-      height: 240px;
+      width: 250px;
+      height: 250px;
       position: relative;
-      border-radius: 16px;
-      box-shadow: 0 0 0 4000px rgba(0, 0, 0, 0.55);
-      border: 1.5px solid rgba(255, 255, 255, 0.4);
+      border-radius: 18px;
+      box-shadow: 0 0 0 4000px rgba(0, 0, 0, 0.52);
+      border: 1px solid rgba(255, 255, 255, 0.35);
     }
     .reticle::before, .reticle::after {
       content: '';
       position: absolute;
-      width: 28px;
-      height: 28px;
+      width: 32px;
+      height: 32px;
       border-color: #70B62C;
       border-style: solid;
     }
-    .reticle::before { top: -2px; left: -2px; border-width: 4px 0 0 4px; border-top-left-radius: 14px; }
-    .reticle::after { bottom: -2px; right: -2px; border-width: 0 4px 4px 0; border-bottom-right-radius: 14px; }
+    .reticle::before { top: -2px; left: -2px; border-width: 4px 0 0 4px; border-top-left-radius: 16px; }
+    .reticle::after { bottom: -2px; right: -2px; border-width: 0 4px 4px 0; border-bottom-right-radius: 16px; }
+    
     .corner-tr, .corner-bl {
       position: absolute;
-      width: 28px;
-      height: 28px;
+      width: 32px;
+      height: 32px;
       border-color: #70B62C;
       border-style: solid;
     }
-    .corner-tr { top: -2px; right: -2px; border-width: 4px 4px 0 0; border-top-right-radius: 14px; }
-    .corner-bl { bottom: -2px; left: -2px; border-width: 0 0 4px 4px; border-bottom-left-radius: 14px; }
+    .corner-tr { top: -2px; right: -2px; border-width: 4px 4px 0 0; border-top-right-radius: 16px; }
+    .corner-bl { bottom: -2px; left: -2px; border-width: 0 0 4px 4px; border-bottom-left-radius: 16px; }
+
     .laser {
       position: absolute;
       left: 6px; right: 6px;
@@ -99,12 +101,13 @@
       100% { top: 8%; opacity: 0.3; }
     }
     .tip {
-      margin-top: 24px;
+      margin-top: 26px;
       font-size: 0.85rem;
       background: rgba(0,0,0,0.65);
-      padding: 6px 16px;
+      padding: 6px 18px;
       border-radius: 20px;
       font-weight: 600;
+      color: #f1f5f9;
     }
   </style>
 </head>
@@ -114,7 +117,8 @@
     <button class="btn-close" onclick="window.close()">Đóng</button>
   </div>
 
-  <div id="reader"></div>
+  <video id="scannerVideo" playsinline webkit-playsinline muted autoplay></video>
+  <canvas id="scannerCanvas" style="display:none;"></canvas>
 
   <div class="overlay">
     <div class="reticle">
@@ -126,7 +130,9 @@
   </div>
 
   <script>
-    let html5QrCode = null;
+    let videoStream = null;
+    let animFrameId = null;
+    let isScanned = false;
 
     function playFeedback() {
       if (navigator.vibrate) navigator.vibrate(90);
@@ -144,40 +150,70 @@
       } catch(e) {}
     }
 
-    function onScanSuccess(decodedText) {
-      playFeedback();
-      const code = decodedText.trim().toUpperCase();
+    function startCamera() {
+      const video = document.getElementById('scannerVideo');
+      const canvas = document.getElementById('scannerCanvas');
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
-      // BẮN MÃ VỀ LẠI WEB APP APPS SCRIPT
-      if (window.opener) {
-        window.opener.postMessage({ type: 'TBS_QR_SCANNED', code: code }, '*');
-      }
-
-      // Lưu dự phòng vào LocalStorage
-      try { localStorage.setItem('tbs_last_scanned_code', code); } catch(e) {}
-
-      // Tự động đóng tab quét sau 300ms
-      setTimeout(() => {
-        window.close();
-      }, 300);
-    }
-
-    window.addEventListener('DOMContentLoaded', () => {
-      html5QrCode = new Html5Qrcode("reader");
-      const config = {
-        fps: 20,
-        qrbox: { width: 240, height: 240 },
-        videoConstraints: {
+      const constraints = {
+        audio: false,
+        video: {
           facingMode: { ideal: "environment" },
-          focusMode: "continuous"
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
         }
       };
 
-      html5QrCode.start({ facingMode: "environment" }, config, onScanSuccess, () => {})
+      navigator.mediaDevices.getUserMedia(constraints)
+        .then(stream => {
+          videoStream = stream;
+          video.srcObject = stream;
+          video.play().then(() => {
+            requestAnimationFrame(() => scanFrame(video, canvas, ctx));
+          });
+        })
         .catch(err => {
           alert("Vui lòng cấp quyền Camera trên trình duyệt!");
         });
-    });
+    }
+
+    function scanFrame(video, canvas, ctx) {
+      if (isScanned) return;
+
+      if (video.readyState >= video.HAVE_CURRENT_DATA && video.videoWidth > 0) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        if (window.jsQR) {
+          const code = jsQR(imageData.data, imageData.width, imageData.height, {
+            inversionAttempts: "dontInvert"
+          });
+
+          if (code && code.data) {
+            isScanned = true;
+            playFeedback();
+            const scannedCode = code.data.trim().toUpperCase();
+
+            // Gửi dữ liệu về cho Google Apps Script
+            if (window.opener) {
+              window.opener.postMessage({ type: 'TBS_QR_SCANNED', code: scannedCode }, '*');
+            }
+            try { localStorage.setItem('tbs_last_scanned_code', scannedCode); } catch(e) {}
+
+            setTimeout(() => {
+              window.close();
+            }, 250);
+            return;
+          }
+        }
+      }
+
+      animFrameId = requestAnimationFrame(() => scanFrame(video, canvas, ctx));
+    }
+
+    window.addEventListener('DOMContentLoaded', startCamera);
   </script>
 </body>
 </html>
