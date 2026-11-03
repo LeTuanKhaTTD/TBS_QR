@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>TBS QR Scanner</title>
+  <!-- Thư viện quét camera chuyên nghiệp -->
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #000;
+      color: #fff;
+      font-family: system-ui, -apple-system, sans-serif;
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    .header {
+      padding: 14px 18px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(0,0,0,0.85);
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      z-index: 20;
+    }
+    .title { font-size: 1rem; font-weight: 700; color: #70B62C; }
+    .btn-close {
+      background: rgba(255,255,255,0.2);
+      border: none;
+      color: #fff;
+      padding: 6px 14px;
+      border-radius: 20px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    #reader {
+      width: 100vw !important;
+      height: 100vh !important;
+      object-fit: cover;
+    }
+    #reader video {
+      width: 100% !important;
+      height: 100% !important;
+      object-fit: cover !important;
+    }
+    /* Khung ngắm Laser Ngân Hàng */
+    .overlay {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 10;
+    }
+    .reticle {
+      width: 240px;
+      height: 240px;
+      position: relative;
+      border-radius: 16px;
+      box-shadow: 0 0 0 4000px rgba(0, 0, 0, 0.55);
+      border: 1.5px solid rgba(255, 255, 255, 0.4);
+    }
+    .reticle::before, .reticle::after {
+      content: '';
+      position: absolute;
+      width: 28px;
+      height: 28px;
+      border-color: #70B62C;
+      border-style: solid;
+    }
+    .reticle::before { top: -2px; left: -2px; border-width: 4px 0 0 4px; border-top-left-radius: 14px; }
+    .reticle::after { bottom: -2px; right: -2px; border-width: 0 4px 4px 0; border-bottom-right-radius: 14px; }
+    .corner-tr, .corner-bl {
+      position: absolute;
+      width: 28px;
+      height: 28px;
+      border-color: #70B62C;
+      border-style: solid;
+    }
+    .corner-tr { top: -2px; right: -2px; border-width: 4px 4px 0 0; border-top-right-radius: 14px; }
+    .corner-bl { bottom: -2px; left: -2px; border-width: 0 0 4px 4px; border-bottom-left-radius: 14px; }
+    .laser {
+      position: absolute;
+      left: 6px; right: 6px;
+      height: 3px;
+      background: linear-gradient(90deg, transparent, #70B62C 50%, transparent);
+      box-shadow: 0 0 10px #70B62C, 0 0 16px #70B62C;
+      animation: scan 1.8s infinite ease-in-out;
+    }
+    @keyframes scan {
+      0% { top: 8%; opacity: 0.3; }
+      50% { top: 88%; opacity: 1; }
+      100% { top: 8%; opacity: 0.3; }
+    }
+    .tip {
+      margin-top: 24px;
+      font-size: 0.85rem;
+      background: rgba(0,0,0,0.65);
+      padding: 6px 16px;
+      border-radius: 20px;
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="title">📷 QUÉT QR KỆ KHO</div>
+    <button class="btn-close" onclick="window.close()">Đóng</button>
+  </div>
+
+  <div id="reader"></div>
+
+  <div class="overlay">
+    <div class="reticle">
+      <div class="corner-tr"></div>
+      <div class="corner-bl"></div>
+      <div class="laser"></div>
+    </div>
+    <div class="tip">Hướng camera vào mã QR dán trên kệ</div>
+  </div>
+
+  <script>
+    let html5QrCode = null;
+
+    function playFeedback() {
+      if (navigator.vibrate) navigator.vibrate(90);
+      try {
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.frequency.value = 1800;
+        gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.12);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.12);
+      } catch(e) {}
+    }
+
+    function onScanSuccess(decodedText) {
+      playFeedback();
+      const code = decodedText.trim().toUpperCase();
+
+      // BẮN MÃ VỀ LẠI WEB APP APPS SCRIPT
+      if (window.opener) {
+        window.opener.postMessage({ type: 'TBS_QR_SCANNED', code: code }, '*');
+      }
+
+      // Lưu dự phòng vào LocalStorage
+      try { localStorage.setItem('tbs_last_scanned_code', code); } catch(e) {}
+
+      // Tự động đóng tab quét sau 300ms
+      setTimeout(() => {
+        window.close();
+      }, 300);
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      html5QrCode = new Html5Qrcode("reader");
+      const config = {
+        fps: 20,
+        qrbox: { width: 240, height: 240 },
+        videoConstraints: {
+          facingMode: { ideal: "environment" },
+          focusMode: "continuous"
+        }
+      };
+
+      html5QrCode.start({ facingMode: "environment" }, config, onScanSuccess, () => {})
+        .catch(err => {
+          alert("Vui lòng cấp quyền Camera trên trình duyệt!");
+        });
+    });
+  </script>
+</body>
+</html>
