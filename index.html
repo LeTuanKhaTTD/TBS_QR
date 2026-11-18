@@ -5,7 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
   <title>TBS QR Scanner</title>
   <!-- Thư viện giải mã trực tiếp cực nhẹ, không sinh thẻ thừa gây lag/lệch -->
-  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js" onerror="loadFallback()"></script>
+<script>
+  function loadFallback() {
+    var s = document.createElement('script');
+    s.src = 'https://unpkg.com/jsqr@1.4.0/dist/jsQR.js';
+    document.head.appendChild(s);
+  }
+</script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
     body {
@@ -100,6 +107,8 @@
       50% { top: 88%; opacity: 1; }
       100% { top: 8%; opacity: 0.3; }
     }
+    #status { position:absolute; left:12px; right:12px; bottom:28px; z-index:30; text-align:center;
+    background:rgba(0,0,0,.7); padding:10px 14px; border-radius:12px; font-size:.85rem; font-weight:600; word-break:break-all; }
     .tip {
       margin-top: 26px;
       font-size: 0.85rem;
@@ -128,92 +137,89 @@
     </div>
     <div class="tip">Hướng camera vào mã QR dán trên kệ</div>
   </div>
-
+  <div id="status">Đang mở camera...</div>
   <script>
-    let videoStream = null;
-    let animFrameId = null;
-    let isScanned = false;
+  let videoStream = null, isScanned = false, detector = null, lastTry = 0;
+  const setStatus = t => { document.getElementById('status').textContent = t; };
 
-    function playFeedback() {
-      if (navigator.vibrate) navigator.vibrate(90);
+  function playFeedback() {
+    if (navigator.vibrate) navigator.vibrate(90);
+    try {
+      const a = new (window.AudioContext || window.webkitAudioContext)();
+      const o = a.createOscillator(), g = a.createGain();
+      o.connect(g); g.connect(a.destination);
+      o.frequency.value = 1800;
+      g.gain.setValueAtTime(0.2, a.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.01, a.currentTime + 0.12);
+      o.start(); o.stop(a.currentTime + 0.12);
+    } catch (e) {}
+  }
+
+  function finish(raw) {
+    if (isScanned) return;
+    isScanned = true;
+    playFeedback();
+    const code = String(raw || '').trim().toUpperCase();
+    if (videoStream) videoStream.getTracks().forEach(t => t.stop());
+    if (window.opener && !window.opener.closed) {
+      window.opener.postMessage({ type: 'TBS_QR_SCANNED', code: code }, '*');
+      setStatus('Đã quét xong');
+      setTimeout(() => window.close(), 250);
+    } else {
+      setStatus('Quét được: ' + code + ' nhưng không tìm thấy app để gửi về. Hãy đóng trang này và bấm Quét từ trong app.');
+    }
+  }
+
+  async function loop(video, canvas, ctx) {
+    if (isScanned) return;
+    const now = performance.now();
+    if (now - lastTry > 120 && video.readyState >= 2 && video.videoWidth > 0) {
+      lastTry = now;
       try {
-        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        const osc = audioCtx.createOscillator();
-        const gain = audioCtx.createGain();
-        osc.connect(gain);
-        gain.connect(audioCtx.destination);
-        osc.frequency.value = 1800;
-        gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.12);
-        osc.start();
-        osc.stop(audioCtx.currentTime + 0.12);
-      } catch(e) {}
+        if (detector) {
+          const r = await detector.detect(video);
+          if (r.length && r[0].rawValue) return finish(r[0].rawValue);
+        } else if (window.jsQR) {
+          const scale = Math.min(1, 1280 / video.videoWidth);
+          canvas.width = Math.round(video.videoWidth * scale);
+          canvas.height = Math.round(video.videoHeight * scale);
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const c = jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' });
+          if (c && c.data) return finish(c.data);
+        } else {
+          setStatus('Chưa tải được thư viện đọc QR. Kiểm tra mạng rồi tải lại trang.');
+        }
+      } catch (e) { detector = null; }
     }
+    requestAnimationFrame(() => loop(video, canvas, ctx));
+  }
 
-    function startCamera() {
-      const video = document.getElementById('scannerVideo');
-      const canvas = document.getElementById('scannerCanvas');
-      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  async function startCamera() {
+    const video = document.getElementById('scannerVideo');
+    const canvas = document.getElementById('scannerCanvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
-      const constraints = {
+    if ('BarcodeDetector' in window) {
+      try { detector = new BarcodeDetector({ formats: ['qr_code'] }); } catch (e) { detector = null; }
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
         audio: false,
-        video: {
-          facingMode: { ideal: "environment" },
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
-        }
-      };
-
-      navigator.mediaDevices.getUserMedia(constraints)
-        .then(stream => {
-          videoStream = stream;
-          video.srcObject = stream;
-          video.play().then(() => {
-            requestAnimationFrame(() => scanFrame(video, canvas, ctx));
-          });
-        })
-        .catch(err => {
-          alert("Vui lòng cấp quyền Camera trên trình duyệt!");
-        });
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }
+      });
+      videoStream = stream;
+      video.srcObject = stream;
+      try { await stream.getVideoTracks()[0].applyConstraints({ advanced: [{ focusMode: 'continuous' }] }); } catch (e) {}
+      await video.play();
+      setStatus(detector ? 'Đang quét (chế độ nhanh)...' : 'Đang quét... giữ camera cách mã 15 đến 25 cm');
+      loop(video, canvas, ctx);
+    } catch (err) {
+      setStatus('Không mở được camera. Hãy cấp quyền camera cho trình duyệt.');
     }
+  }
 
-    function scanFrame(video, canvas, ctx) {
-      if (isScanned) return;
-
-      if (video.readyState >= video.HAVE_CURRENT_DATA && video.videoWidth > 0) {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        if (window.jsQR) {
-          const code = jsQR(imageData.data, imageData.width, imageData.height, {
-            inversionAttempts: "dontInvert"
-          });
-
-          if (code && code.data) {
-            isScanned = true;
-            playFeedback();
-            const scannedCode = code.data.trim().toUpperCase();
-
-            // Gửi dữ liệu về cho Google Apps Script
-            if (window.opener) {
-              window.opener.postMessage({ type: 'TBS_QR_SCANNED', code: scannedCode }, '*');
-            }
-            try { localStorage.setItem('tbs_last_scanned_code', scannedCode); } catch(e) {}
-
-            setTimeout(() => {
-              window.close();
-            }, 250);
-            return;
-          }
-        }
-      }
-
-      animFrameId = requestAnimationFrame(() => scanFrame(video, canvas, ctx));
-    }
-
-    window.addEventListener('DOMContentLoaded', startCamera);
-  </script>
+  window.addEventListener('DOMContentLoaded', startCamera);
+</script>
 </body>
 </html>
